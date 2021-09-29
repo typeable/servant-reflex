@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes        #-}
+{-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE CPP                        #-}
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE FlexibleContexts           #-}
@@ -65,6 +66,7 @@ import qualified Servant.Auth            as Auth
 
 import           Reflex.Dom.Core         (Dynamic, Event, Reflex,
                                           XhrRequest (..), XhrResponse (..),
+                                          XhrResponseBody(..),
                                           XhrResponseHeaders (..),
                                           attachPromptlyDynWith, constDyn, ffor,
                                           fmapMaybe, leftmost,
@@ -80,6 +82,7 @@ import           Servant.Common.Req      (ClientOptions(..),
                                           defReq, evalResponse, prependToPathParts,
                                           -- performRequestCT,
                                           performRequestsCT,
+                                          performRequests,
                                           -- performRequestNoBody,
                                           performRequestsNoBody,
                                           performSomeRequestsAsync,
@@ -90,6 +93,17 @@ import           Servant.Common.Req      (ClientOptions(..),
                                           reqTag,
                                           qParams, withCredentials)
 
+#if MIN_VERSION_servant(0, 18, 1)
+import           Control.Arrow
+import           Data.Either
+import           Data.SOP
+import           Data.SOP.NP
+import           Servant.API.ContentTypes (AllMimeUnrender(..))
+import           Servant.API.UVerb
+import qualified Data.ByteString.Lazy as BL
+import qualified Network.HTTP.Media               as M
+import           Network.HTTP.Types.Status (Status(..))
+#endif
 
 -- * Accessing APIs as a Client
 
@@ -225,7 +239,6 @@ instance {-# OVERLAPPING #-}
     wrap =<< fmap  runIdentity <$> performRequestsNoBody method (constDyn $ Identity req) baseurl opts trigs
       where method = E.decodeUtf8 $ reflectMethod (Proxy :: Proxy method)
 
-
 toHeaders :: BuildHeadersTo ls => ReqResult tag a -> ReqResult tag (Headers ls a)
 toHeaders r =
   let hdrs = maybe []
@@ -286,6 +299,75 @@ instance {-# OVERLAPPABLE #-}
                       OnlyHeaders (Set.fromList (buildHeaderKeysTo (Proxy :: Proxy ls)))
                      }
 
+#if MIN_VERSION_servant(0, 18, 1)
+instance
+  ( ReflectMethod method, cts' ~ (ct ': cts)
+  , as' ~ (a ': as)
+  , All (AllMimeUnrender cts') as'
+  , All HasStatus as'
+  , SupportsServantReflex t m
+  ) =>
+  HasClient t m (UVerb method cts' as') tag where
+    type Client t m (UVerb method cts' as') tag
+      = Event t tag -> m (Event t (ReqResult tag (Union as')))
+    clientWithRouteAndResultHandler Proxy _ _ req baseurl opts wrap' trigs =
+      wrap' =<< fmap runIdentity <$> perform
+        where
+        method = E.decodeUtf8 $ reflectMethod (Proxy :: Proxy method)
+        perform = do
+          resp <- performRequests method (constDyn $ Identity req)
+            baseurl opts trigs
+          return $ fmap
+            (\(t,rs) -> ffor rs $ \case
+              Left e  -> RequestFailure t e
+              Right g -> evalResponse' t g
+            )
+            resp
+        -- Try to decode the content. If decoding fails, we declare
+        -- response failure. Note that HTTP status 500 response is not
+        -- necessary a failure.
+        evalResponse' t g = case decodeResp g of
+          Left err -> ResponseFailure t err g
+          Right v -> ResponseSuccess t v g
+        decodeResp r =
+          let
+            status = _xhrResponse_status r
+            -- We go through all possible response types and find types with
+            -- the HTTP status we got. Try to parse these response types
+            -- and use the first one that succeeds.
+            parse
+              :: forall xs. All HasStatus xs
+              => NP ([] :.: Either (M.MediaType, String)) xs
+              -> Either Text (Union xs)
+            parse Nil =
+              -- No more response types to try
+              Left "Unknown response"
+            parse (Comp x :* xs)
+              | status == (fromIntegral . statusCode $ statusOf (Comp x)) =
+                -- Found response type for the response status we got
+                case partitionEithers x of
+                  -- can't parse the type, go to the next candidate
+                  (_, []) -> S <$> parse xs
+                  -- parse succeeded, return the result
+                  (_, (res : _)) -> Right . inject . I $ res
+              -- Status doesn't match, go to the next candidate
+              | otherwise = S <$> parse xs
+          in case _xhrResponse_response r of
+            Just (XhrResponseBody_ArrayBuffer x) ->
+              parse (mimeUnrenders (Proxy :: Proxy cts') (BL.fromStrict x))
+            _ -> Left "No Body"
+
+mimeUnrenders ::
+  forall cts xs.
+  All (AllMimeUnrender cts) xs =>
+  Proxy cts ->
+  BL.ByteString ->
+  NP ([] :.: Either (M.MediaType, String)) xs
+mimeUnrenders ctp body = cpure_NP
+  (Proxy :: Proxy (AllMimeUnrender cts))
+  (Comp . map (\(mediaType, parser) -> left ((,) mediaType) (parser body))
+    . allMimeUnrender $ ctp)
+#endif
 
 
 -- HEADER
@@ -369,23 +451,24 @@ instance (HasClient t m sublayout tag, KnownSymbol sym)
 -- > -- then you can just use "getBooksBy" to query that endpoint.
 -- > -- 'getBooksBy Nothing' for all books
 -- > -- 'getBooksBy (Just "Isaac Asimov")' to get all books by Isaac Asimov
-instance (KnownSymbol sym, ToHttpApiData a, HasClient t m sublayout tag, Reflex t)
-      => HasClient t m (QueryParam' mods sym a :> sublayout) tag where
+instance
+  ( KnownSymbol sym
+  , ToHttpApiData a
+  , HasClient t m sublayout tag
+  , Reflex t
+  ) => HasClient t m (QueryParam' mods sym a :> sublayout) tag where
 
   type Client t m (QueryParam' mods sym a :> sublayout) tag =
     Dynamic t (QParam a) -> Client t m sublayout tag
 
   -- if mparam = Nothing, we don't add it to the query string
-  clientWithRouteAndResultHandler Proxy q t req baseurl opts wrap mparam =
+  clientWithRouteAndResultHandler Proxy q t req baseurl opts wrp mparam =
     clientWithRouteAndResultHandler (Proxy :: Proxy sublayout) q t
-      (req {qParams = paramPair : qParams req}) baseurl opts wrap
-
-    where pname = symbolVal (Proxy :: Proxy sym)
-          --p prm = QueryPartParam $ (fmap . fmap) (toQueryParam) prm
-          --paramPair = (T.pack pname, p mparam)
-          p prm = QueryPartParam $ fmap qParamToQueryPart prm -- (fmap . fmap) (unpack . toQueryParam) prm
-          paramPair = (T.pack pname, p mparam)
-
+    (req {qParams = paramPair : qParams req}) baseurl opts wrp
+    where
+      pname = symbolVal (Proxy :: Proxy sym)
+      p prm = QueryPartParam $ fmap qParamToQueryPart prm
+      paramPair = (T.pack pname, p mparam)
 
 
 -- | If you use a 'QueryParams' in one of your endpoints in your API,
@@ -429,7 +512,6 @@ instance (KnownSymbol sym, ToHttpApiData a, HasClient t m sublayout tag, Reflex 
             pname   = symbolVal (Proxy :: Proxy sym)
             params' = QueryPartParams $ (fmap . fmap) toQueryParam
                         paramlist
-
 
 
 -- | If you use a 'QueryFlag' in one of your endpoints in your API,

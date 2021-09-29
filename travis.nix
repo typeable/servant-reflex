@@ -19,7 +19,7 @@ let
   ghcjsPkgs = with lib; reflexPlatform.${jsCompiler}.override {
     overrides = self: super: {
       http-media      = dontCheck super.http-media;
-      servant         = dontCheck super.servant;
+      servant         = dontCheck (super.callHackage "servant" "0.18.2" {}) ;
       lens-aeson      = dontCheck super.lens-aeson;
       servant-reflex = lib.appendConfigureFlag
                          (self.callPackage ./default.nix {}) "-fExample";
@@ -28,7 +28,8 @@ let
 
   ghcPkgs = with lib; reflexPlatform.${nativeCompiler}.override {
     overrides = self: super: {
-      servant-snap    = dontCheck ((import ./nix/servant-snap.nix {}) self super);
+      servant-snap    = doJailbreak ( dontCheck ((import ./nix/servant-snap.nix {}) self super)) ;
+      servant         = dontCheck (super.callHackage "servant" "0.18.2" {}) ;
       testdriver      = self.callCabal2nix "testdriver" ./testdriver {};
       testserver      = import nix/testserver.nix ghcjsPkgs.servant-reflex self super;
       servant-reflex  = self.callPackage ./default.nix {};
