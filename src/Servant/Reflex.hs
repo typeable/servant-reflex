@@ -225,6 +225,64 @@ instance {-# OVERLAPPING #-}
     wrap =<< fmap  runIdentity <$> performRequestsNoBody method (constDyn $ Identity req) baseurl opts trigs
       where method = E.decodeUtf8 $ reflectMethod (Proxy :: Proxy method)
 
+#if MIN_VERSION_servant(0, 18, 1)
+instance
+  ( ReflectMethod method, cts' ~ (ct ': cts)
+  , as' ~ (a ': as)
+  , All (AllMimeUnrender cts') as'
+  , All HasStatus as'
+  , SupportsServantReflex t m
+  ) =>
+  HasClient t m (UVerb method cts' as') tag where
+    type Client t m (UVerb method cts' as') tag
+      = Event t tag -> m (Event t (ReqResult tag (Union as')))
+    clientWithRouteAndResultHandler Proxy _ _ req baseurl opts wrap' trigs =
+      wrap' =<< fmap runIdentity <$> perform
+        where
+        method = Text.decodeUtf8 $ reflectMethod (Proxy :: Proxy method)
+        perform = do
+          resp <- performRequests method (constDyn $ Identity req)
+            baseurl opts trigs
+          return $ fmap
+            (\(t,rs) -> ffor rs $ \case
+              Left e  -> RequestFailure t e
+              Right g -> evalResponse' t g
+            )
+            resp
+        -- Try to decode the content. If decoding fails, we declare
+        -- response failure. Note that HTTP status 500 response is not
+        -- necessary a failure.
+        evalResponse' t g = case decodeResp g of
+          Left err -> ResponseFailure t err g
+          Right v -> ResponseSuccess t v g
+        decodeResp r =
+          let
+            status = _xhrResponse_status r
+            -- We go through all possible response types and find types with
+            -- the HTTP status we got. Try to parse these response types
+            -- and use the first one that succeeds.
+            parse
+              :: forall xs. All HasStatus xs
+              => NP ([] :.: Either (MediaType, String)) xs
+              -> Either Text (Union xs)
+            parse Nil =
+              -- No more response types to try
+              Left "Unknown response"
+            parse (Comp x :* xs)
+              | status == (fromIntegral . statusCode $ statusOf (Comp x)) =
+                -- Found response type for the response status we got
+                case partitionEithers x of
+                  -- can't parse the type, go to the next candidate
+                  (_, []) -> S <$> parse xs
+                  -- parse succeeded, return the result
+                  (_, (res : _)) -> Right . inject . I $ res
+              -- Status doesn't match, go to the next candidate
+              | otherwise = S <$> parse xs
+          in case _xhrResponse_response r of
+            Just (XhrResponseBody_ArrayBuffer x) ->
+              parse (mimeUnrenders (Proxy @cts') (Lazy.ByteString.fromStrict x))
+            _ -> Left "No Body"
+#endif
 
 toHeaders :: BuildHeadersTo ls => ReqResult tag a -> ReqResult tag (Headers ls a)
 toHeaders r =
@@ -622,4 +680,3 @@ type family HasCookieAuth xs :: Constraint where
   HasCookieAuth '[]         = CookieAuthNotEnabled
 
 class CookieAuthNotEnabled
-
