@@ -28,7 +28,7 @@ let
 
   ghcPkgs = with lib; reflexPlatform.${nativeCompiler}.override {
     overrides = self: super: {
-      servant-snap    = dontCheck ((import ./nix/servant-snap.nix {}) self super);
+      servant-snap    = doJailbreak ( dontCheck ((import ./nix/servant-snap.nix {}) self super)) ;
       servant         = dontCheck (super.callHackage "servant" "0.18.2" {}) ;
       testdriver      = self.callCabal2nix "testdriver" ./testdriver {};
       testserver      = import nix/testserver.nix ghcjsPkgs.servant-reflex self super;
