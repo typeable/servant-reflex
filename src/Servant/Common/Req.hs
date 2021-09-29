@@ -319,7 +319,8 @@ performSomeRequestsAsync'
     :: (MonadJSM (Performable m), PerformEvent t m, TriggerEvent t m, Traversable f, Show b)
     => ClientOptions
     -> (XhrRequest b -> (a -> JSM ()) -> Performable m XMLHttpRequest)
-    -> Event t (Performable m (f (Either Text (XhrRequest b)))) -> m (Event t (f (Either Text a)))
+    -> Event t (Performable m (f (Either Text (XhrRequest b))))
+    -> m (Event t (f (Either Text a)))
 performSomeRequestsAsync' opts newXhr req = performEventAsync $ ffor req $ \hrs cb -> do
   rs <- hrs
   resps <- forM rs $ \r -> case r of
@@ -428,4 +429,3 @@ builderToText = TE.decodeUtf8 . BL.toStrict . Builder.toLazyByteString
 
 escape :: T.Text -> T.Text
 escape = T.pack . N.escapeURIString (not . N.isReserved) . T.unpack . TE.decodeUtf8 . BL.toStrict . Builder.toLazyByteString . toEncodedUrlPiece
-

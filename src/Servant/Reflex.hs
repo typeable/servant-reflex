@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes        #-}
+{-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE CPP                        #-}
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE FlexibleContexts           #-}
@@ -65,6 +66,7 @@ import qualified Servant.Auth            as Auth
 
 import           Reflex.Dom.Core         (Dynamic, Event, Reflex,
                                           XhrRequest (..), XhrResponse (..),
+                                          XhrResponseBody(..),
                                           XhrResponseHeaders (..),
                                           attachPromptlyDynWith, constDyn, ffor,
                                           fmapMaybe, leftmost,
@@ -80,6 +82,7 @@ import           Servant.Common.Req      (ClientOptions(..),
                                           defReq, evalResponse, prependToPathParts,
                                           -- performRequestCT,
                                           performRequestsCT,
+                                          performRequests,
                                           -- performRequestNoBody,
                                           performRequestsNoBody,
                                           performSomeRequestsAsync,
@@ -90,6 +93,17 @@ import           Servant.Common.Req      (ClientOptions(..),
                                           reqTag,
                                           qParams, withCredentials)
 
+#if MIN_VERSION_servant(0, 18, 1)
+import           Control.Arrow
+import           Data.Either
+import           Data.SOP
+import           Data.SOP.NP
+import           Servant.API.ContentTypes (AllMimeUnrender(..))
+import           Servant.API.UVerb
+import qualified Data.ByteString.Lazy as BL
+import qualified Network.HTTP.Media               as M
+import           Network.HTTP.Types.Status (Status(..))
+#endif
 
 -- * Accessing APIs as a Client
 
@@ -239,7 +253,7 @@ instance
     clientWithRouteAndResultHandler Proxy _ _ req baseurl opts wrap' trigs =
       wrap' =<< fmap runIdentity <$> perform
         where
-        method = Text.decodeUtf8 $ reflectMethod (Proxy :: Proxy method)
+        method = E.decodeUtf8 $ reflectMethod (Proxy :: Proxy method)
         perform = do
           resp <- performRequests method (constDyn $ Identity req)
             baseurl opts trigs
@@ -263,7 +277,7 @@ instance
             -- and use the first one that succeeds.
             parse
               :: forall xs. All HasStatus xs
-              => NP ([] :.: Either (MediaType, String)) xs
+              => NP ([] :.: Either (M.MediaType, String)) xs
               -> Either Text (Union xs)
             parse Nil =
               -- No more response types to try
@@ -280,8 +294,19 @@ instance
               | otherwise = S <$> parse xs
           in case _xhrResponse_response r of
             Just (XhrResponseBody_ArrayBuffer x) ->
-              parse (mimeUnrenders (Proxy @cts') (Lazy.ByteString.fromStrict x))
+              parse (mimeUnrenders (Proxy :: Proxy cts') (BL.fromStrict x))
             _ -> Left "No Body"
+
+mimeUnrenders ::
+  forall cts xs.
+  All (AllMimeUnrender cts) xs =>
+  Proxy cts ->
+  BL.ByteString ->
+  NP ([] :.: Either (M.MediaType, String)) xs
+mimeUnrenders ctp body = cpure_NP
+  (Proxy :: Proxy (AllMimeUnrender cts))
+  (Comp . map (\(mediaType, parser) -> left ((,) mediaType) (parser body))
+    . allMimeUnrender $ ctp)
 #endif
 
 toHeaders :: BuildHeadersTo ls => ReqResult tag a -> ReqResult tag (Headers ls a)
