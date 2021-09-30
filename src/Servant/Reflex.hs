@@ -239,6 +239,66 @@ instance {-# OVERLAPPING #-}
     wrap =<< fmap  runIdentity <$> performRequestsNoBody method (constDyn $ Identity req) baseurl opts trigs
       where method = E.decodeUtf8 $ reflectMethod (Proxy :: Proxy method)
 
+toHeaders :: BuildHeadersTo ls => ReqResult tag a -> ReqResult tag (Headers ls a)
+toHeaders r =
+  let hdrs = maybe []
+                   (\xhr -> fmap (\(h,v) -> (CI.map E.encodeUtf8 h, E.encodeUtf8 v))
+                     (Map.toList $ _xhrResponse_headers xhr))
+                   (response r)
+  in  ffor r $ \a -> Headers {getResponse = a ,getHeadersHList = buildHeadersTo hdrs}
+
+
+class BuildHeaderKeysTo hs where
+  buildHeaderKeysTo :: Proxy hs -> [CI.CI T.Text]
+
+instance {-# OVERLAPPABLE #-} BuildHeaderKeysTo '[]
+  where buildHeaderKeysTo _ = []
+
+instance {-# OVERLAPPABLE #-} (BuildHeaderKeysTo xs, KnownSymbol h)
+  => BuildHeaderKeysTo ((Header h v) ': xs) where
+  buildHeaderKeysTo _ =
+    let
+      thisKey = CI.mk $ T.pack (symbolVal (Proxy :: Proxy h))
+    in thisKey : buildHeaderKeysTo (Proxy :: Proxy xs)
+
+
+-- HEADERS Verb (Content) --
+-- Headers combinator not treated in fully general case,
+-- in order to deny instances for (Headers ls (Capture "id" Int)),
+-- a combinator that wouldn't make sense
+-- TODO Overlapping??
+instance {-# OVERLAPPABLE #-}
+  -- Note [Non-Empty Content Types]
+  ( MimeUnrender ct a, BuildHeadersTo ls, BuildHeaderKeysTo ls,
+    ReflectMethod method, cts' ~ (ct ': cts),
+    SupportsServantReflex t m
+  ) => HasClient t m (Verb method status cts' (Headers ls a)) tag where
+  type Client t m (Verb method status cts' (Headers ls a)) tag =
+      Event t tag -> m (Event t (ReqResult tag (Headers ls a)))
+  clientWithRouteAndResultHandler Proxy _ _ req baseurl opts wrap trigs = do
+    let method = E.decodeUtf8 $ reflectMethod (Proxy :: Proxy method)
+    resp <- fmap runIdentity <$> performRequestsCT (Proxy :: Proxy ct) method (constDyn $ Identity req') baseurl opts trigs
+    wrap $ toHeaders <$> resp
+    where req' = req { respHeaders =
+                       OnlyHeaders (Set.fromList (buildHeaderKeysTo (Proxy :: Proxy ls)))
+                     }
+
+
+-- HEADERS Verb (No content) --
+instance {-# OVERLAPPABLE #-}
+  ( BuildHeadersTo ls, BuildHeaderKeysTo ls, ReflectMethod method,
+    SupportsServantReflex t m
+  ) => HasClient t m (Verb method status cts (Headers ls NoContent)) tag where
+  type Client t m (Verb method status cts (Headers ls NoContent)) tag
+    = Event t tag -> m (Event t (ReqResult tag (Headers ls NoContent)))
+  clientWithRouteAndResultHandler Proxy _ _ req baseurl opts wrap trigs = do
+    let method = E.decodeUtf8 $ reflectMethod (Proxy :: Proxy method)
+    resp <- fmap runIdentity <$> performRequestsNoBody method (constDyn $ Identity req') baseurl opts trigs
+    wrap $ toHeaders <$> resp
+    where req' = req {respHeaders =
+                      OnlyHeaders (Set.fromList (buildHeaderKeysTo (Proxy :: Proxy ls)))
+                     }
+
 #if MIN_VERSION_servant(0, 18, 1)
 instance
   ( ReflectMethod method, cts' ~ (ct ': cts)
@@ -308,67 +368,6 @@ mimeUnrenders ctp body = cpure_NP
   (Comp . map (\(mediaType, parser) -> left ((,) mediaType) (parser body))
     . allMimeUnrender $ ctp)
 #endif
-
-toHeaders :: BuildHeadersTo ls => ReqResult tag a -> ReqResult tag (Headers ls a)
-toHeaders r =
-  let hdrs = maybe []
-                   (\xhr -> fmap (\(h,v) -> (CI.map E.encodeUtf8 h, E.encodeUtf8 v))
-                     (Map.toList $ _xhrResponse_headers xhr))
-                   (response r)
-  in  ffor r $ \a -> Headers {getResponse = a ,getHeadersHList = buildHeadersTo hdrs}
-
-
-class BuildHeaderKeysTo hs where
-  buildHeaderKeysTo :: Proxy hs -> [CI.CI T.Text]
-
-instance {-# OVERLAPPABLE #-} BuildHeaderKeysTo '[]
-  where buildHeaderKeysTo _ = []
-
-instance {-# OVERLAPPABLE #-} (BuildHeaderKeysTo xs, KnownSymbol h)
-  => BuildHeaderKeysTo ((Header h v) ': xs) where
-  buildHeaderKeysTo _ =
-    let
-      thisKey = CI.mk $ T.pack (symbolVal (Proxy :: Proxy h))
-    in thisKey : buildHeaderKeysTo (Proxy :: Proxy xs)
-
-
--- HEADERS Verb (Content) --
--- Headers combinator not treated in fully general case,
--- in order to deny instances for (Headers ls (Capture "id" Int)),
--- a combinator that wouldn't make sense
--- TODO Overlapping??
-instance {-# OVERLAPPABLE #-}
-  -- Note [Non-Empty Content Types]
-  ( MimeUnrender ct a, BuildHeadersTo ls, BuildHeaderKeysTo ls,
-    ReflectMethod method, cts' ~ (ct ': cts),
-    SupportsServantReflex t m
-  ) => HasClient t m (Verb method status cts' (Headers ls a)) tag where
-  type Client t m (Verb method status cts' (Headers ls a)) tag =
-      Event t tag -> m (Event t (ReqResult tag (Headers ls a)))
-  clientWithRouteAndResultHandler Proxy _ _ req baseurl opts wrap trigs = do
-    let method = E.decodeUtf8 $ reflectMethod (Proxy :: Proxy method)
-    resp <- fmap runIdentity <$> performRequestsCT (Proxy :: Proxy ct) method (constDyn $ Identity req') baseurl opts trigs
-    wrap $ toHeaders <$> resp
-    where req' = req { respHeaders =
-                       OnlyHeaders (Set.fromList (buildHeaderKeysTo (Proxy :: Proxy ls)))
-                     }
-
-
--- HEADERS Verb (No content) --
-instance {-# OVERLAPPABLE #-}
-  ( BuildHeadersTo ls, BuildHeaderKeysTo ls, ReflectMethod method,
-    SupportsServantReflex t m
-  ) => HasClient t m (Verb method status cts (Headers ls NoContent)) tag where
-  type Client t m (Verb method status cts (Headers ls NoContent)) tag
-    = Event t tag -> m (Event t (ReqResult tag (Headers ls NoContent)))
-  clientWithRouteAndResultHandler Proxy _ _ req baseurl opts wrap trigs = do
-    let method = E.decodeUtf8 $ reflectMethod (Proxy :: Proxy method)
-    resp <- fmap runIdentity <$> performRequestsNoBody method (constDyn $ Identity req') baseurl opts trigs
-    wrap $ toHeaders <$> resp
-    where req' = req {respHeaders =
-                      OnlyHeaders (Set.fromList (buildHeaderKeysTo (Proxy :: Proxy ls)))
-                     }
-
 
 
 -- HEADER
