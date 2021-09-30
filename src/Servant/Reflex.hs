@@ -56,7 +56,7 @@ import           Servant.API             ((:<|>) (..), (:>), BasicAuth,
                                           Capture, Header, Headers (..),
                                           HttpVersion, IsSecure,
                                           MimeRender (..), MimeUnrender,
-                                          NoContent, QueryFlag, QueryParam,
+                                          NoContent, QueryFlag, QueryParam',
                                           QueryParams, Raw, ReflectMethod (..),
                                           RemoteHost, ReqBody,
                                           ToHttpApiData (..), Vault, Verb,
@@ -451,23 +451,24 @@ instance (HasClient t m sublayout tag, KnownSymbol sym)
 -- > -- then you can just use "getBooksBy" to query that endpoint.
 -- > -- 'getBooksBy Nothing' for all books
 -- > -- 'getBooksBy (Just "Isaac Asimov")' to get all books by Isaac Asimov
-instance (KnownSymbol sym, ToHttpApiData a, HasClient t m sublayout tag, Reflex t)
-      => HasClient t m (QueryParam sym a :> sublayout) tag where
+instance
+  ( KnownSymbol sym
+  , ToHttpApiData a
+  , HasClient t m sublayout tag
+  , Reflex t
+  ) => HasClient t m (QueryParam' mods sym a :> sublayout) tag where
 
-  type Client t m (QueryParam sym a :> sublayout) tag =
+  type Client t m (QueryParam' mods sym a :> sublayout) tag =
     Dynamic t (QParam a) -> Client t m sublayout tag
 
   -- if mparam = Nothing, we don't add it to the query string
-  clientWithRouteAndResultHandler Proxy q t req baseurl opts wrap mparam =
+  clientWithRouteAndResultHandler Proxy q t req baseurl opts wrp mparam =
     clientWithRouteAndResultHandler (Proxy :: Proxy sublayout) q t
-      (req {qParams = paramPair : qParams req}) baseurl opts wrap
-
-    where pname = symbolVal (Proxy :: Proxy sym)
-          --p prm = QueryPartParam $ (fmap . fmap) (toQueryParam) prm
-          --paramPair = (T.pack pname, p mparam)
-          p prm = QueryPartParam $ fmap qParamToQueryPart prm -- (fmap . fmap) (unpack . toQueryParam) prm
-          paramPair = (T.pack pname, p mparam)
-
+    (req {qParams = paramPair : qParams req}) baseurl opts wrp
+    where
+      pname = symbolVal (Proxy :: Proxy sym)
+      p prm = QueryPartParam $ fmap qParamToQueryPart prm
+      paramPair = (T.pack pname, p mparam)
 
 
 -- | If you use a 'QueryParams' in one of your endpoints in your API,
@@ -511,7 +512,6 @@ instance (KnownSymbol sym, ToHttpApiData a, HasClient t m sublayout tag, Reflex 
             pname   = symbolVal (Proxy :: Proxy sym)
             params' = QueryPartParams $ (fmap . fmap) toQueryParam
                         paramlist
-
 
 
 -- | If you use a 'QueryFlag' in one of your endpoints in your API,
