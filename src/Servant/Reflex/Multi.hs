@@ -33,14 +33,17 @@ module Servant.Reflex.Multi (
     -- , reqSuccess'
     -- , reqFailure
     -- , response
-
-    -- , HasClientMulti(..)
+    BuildHeaderKeysTo(..)
+    , toHeaders
+    , HasClientMulti(..)
     ) where
 
 ------------------------------------------------------------------------------
 import           Control.Applicative     (liftA2)
 import           Data.Functor.Compose    (Compose (..), getCompose)
+import qualified Data.CaseInsensitive    as CI
 import           Data.Proxy              (Proxy (..))
+import qualified Data.Map                as Map
 import qualified Data.Set                as Set
 import           Data.Text               (Text)
 import qualified Data.Text               as T
@@ -62,6 +65,12 @@ import           Reflex.Dom.Core         (Dynamic, Event, Reflex,
                                           XhrRequest (..),
                                           XhrResponseHeaders (..),
                                           attachPromptlyDynWith, constDyn)
+import           Reflex.Dom.Core         (Dynamic, Event, Reflex,
+                                          XhrRequest (..), XhrResponse (..),
+                                          XhrResponseHeaders (..),
+                                          attachPromptlyDynWith, constDyn, ffor,
+                                          fmapMaybe, leftmost,
+                                          performRequestsAsync)
 ------------------------------------------------------------------------------
 import           Servant.Common.BaseUrl (BaseUrl (..), Scheme (..),
                                          SupportsServantReflex)
@@ -77,7 +86,6 @@ import           Servant.Common.Req     (ClientOptions,
                                          qParams, reqBody, reqFailure,
                                          reqMethod, reqSuccess, reqSuccess',
                                          respHeaders, response, withCredentials)
-import           Servant.Reflex         (BuildHeaderKeysTo (..), toHeaders)
 
 
 -- ------------------------------------------------------------------------------
@@ -111,7 +119,6 @@ class HasClientMulti t m layout f (tag :: *) where
     -> ClientOptions
     -> (forall a. Event t (f (ReqResult tag a)) -> m (Event t (f (ReqResult tag a))))
     -> ClientMulti t m layout f tag
-
 
 ------------------------------------------------------------------------------
 instance (HasClientMulti t m a f tag, HasClientMulti t m b f tag) =>
@@ -406,3 +413,25 @@ instance (HasClientMulti t m api f tag, Reflex t, Applicative f)
       where
         req'  a r = r { authData = Just (constDyn a) }
         reqs' = liftA2 req' <$> authdatas <*> reqs
+
+
+class BuildHeaderKeysTo hs where
+  buildHeaderKeysTo :: Proxy hs -> [CI.CI T.Text]
+
+instance {-# OVERLAPPABLE #-} BuildHeaderKeysTo '[]
+  where buildHeaderKeysTo _ = []
+
+instance {-# OVERLAPPABLE #-} (BuildHeaderKeysTo xs, KnownSymbol h)
+  => BuildHeaderKeysTo ((Header h v) ': xs) where
+  buildHeaderKeysTo _ =
+    let
+      thisKey = CI.mk $ T.pack (symbolVal (Proxy :: Proxy h))
+    in thisKey : buildHeaderKeysTo (Proxy :: Proxy xs)
+
+toHeaders :: BuildHeadersTo ls => ReqResult tag a -> ReqResult tag (Headers ls a)
+toHeaders r =
+  let hdrs = maybe []
+                   (\xhr -> fmap (\(h,v) -> (CI.map E.encodeUtf8 h, E.encodeUtf8 v))
+                     (Map.toList $ _xhrResponse_headers xhr))
+                   (response r)
+  in  ffor r $ \a -> Headers {getResponse = a ,getHeadersHList = buildHeadersTo hdrs}
