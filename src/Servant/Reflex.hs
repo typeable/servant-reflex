@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes        #-}
+{-# LANGUAGE FunctionalDependencies     #-}
 {-# LANGUAGE CPP                        #-}
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE FlexibleContexts           #-}
@@ -140,20 +141,20 @@ import           Servant.Reflex.Multi
 -- clientWithOptsAndResultHandler p q t = clientWithRouteAndResultHandler p q t defReq
 
 
--- | This class lets us define how each API combinator
--- influences the creation of an HTTP request. It's mostly
--- an internal class, you can just use 'client'.
-class Monad m => HasClient t m layout (tag :: *) where
-  type Client t m layout tag :: *
-  clientWithRoute
-    :: Proxy layout
-    -> Proxy m
-    -> Proxy tag
-    -> Dynamic t (Req t)
-    -> Dynamic t BaseUrl
-    -> ClientOptions
-    -> (forall a. Event t (ReqResult tag a) -> m (Event t (ReqResult tag a)))
-    -> Client t m layout tag
+-- -- | This class lets us define how each API combinator
+-- -- influences the creation of an HTTP request. It's mostly
+-- -- an internal class, you can just use 'client'.
+-- class Monad m => HasClient t m layout (tag :: *) where
+--   type Client t m layout tag :: *
+--   clientWithRoute
+--     :: Proxy layout
+--     -> Proxy m
+--     -> Proxy tag
+--     -> Dynamic t (Req t)
+--     -> Dynamic t BaseUrl
+--     -> ClientOptions
+--     -> (forall a. Event t (ReqResult tag a) -> m (Event t (ReqResult tag a)))
+--     -> Client t m layout tag
 
 idWrapper
   :: forall t tag m a
@@ -161,12 +162,54 @@ idWrapper
   -> Event t (Identity (ReqResult tag a)) -> m (Event t (Identity (ReqResult tag a)))
 idWrapper = Prelude.error "FIXME: rewrap not implemented"
 
-instance (HasClient t m a tag, HasClient t m b tag) => HasClient t m (a :<|> b) tag where
-  type Client t m (a :<|> b) tag = Client t m a tag :<|> Client t m b tag
+-- data Case
+--   = Case
 
-  clientWithRoute Proxy q pTag req baseurl opts wrap =
-    clientWithRoute (Proxy :: Proxy a) q pTag req baseurl opts wrap :<|>
-    clientWithRoute (Proxy :: Proxy b) q pTag req baseurl opts wrap
+-- type family FunArg a :: * where
+--   FunArg (Identity a -> b) =
+
+class (arg ~ FunArg a) => KillIdentity a arg b | a -> b where
+  -- type NoIdentity a :: *
+  killIdentity :: a -> b
+
+instance ( KillIdentity a na, KillIdentity b nb
+         ) => KillIdentity (a :<|> b) (na :<|> nb) where
+  -- type NoIdentity (a :<|> b) = (NoIdentity a) :<|> (NoIdentity b)
+  killIdentity (a :<|> b) = killIdentity a :<|> killIdentity b
+
+instance (KillIdentity b nb) => KillIdentity (Identity a -> b) (a -> nb) where
+  -- type NoIdentity (Identity a -> b) = a -> NoIdentity b
+  killIdentity f a = killIdentity $ f (Identity a)
+
+instance ( KillIdentity b nb, Functor (Dynamic t)
+         ) => KillIdentity (Dynamic t (Identity a) -> b) (Dynamic t a -> nb) where
+  -- type NoIdentity (Dynamic t (Identity a) -> b) = Dynamic t a -> NoIdentity b
+  killIdentity f da = killIdentity $ f $ Identity <$> da
+
+instance (KillIdentity b nb) => KillIdentity (a -> b) (a -> nb) where
+  -- type NoIdentity (a -> b) = a -> NoIdentity b
+  killIdentity f a = killIdentity $ f a
+
+-- instance (Functor m, Functor (Event t)
+--          ) => KillIdentity (m (Event t (Identity a))) where
+--   type NoIdentity (m (Event t (Identity a))) = m (Event t a)
+--   killIdentity a = fmap (fmap runIdentity) a
+
+-- type family NoIdentity a where
+--   NoIdentity (a :<|> b) = NoIdentity a :<|> NoIdentity b
+--   -- NoIdentity (Identity a) = a
+--   -- NoIdentity (Dynamic (Identity a)) = Dynamic a
+--   NoIdentity (Identity a -> b) = a -> NoIdentity b
+--   NoIdentity (Dynamic t (Identity a) -> b) = Dynamic t a -> NoIdentity b
+--   NoIdentity (a -> b) = a -> NoIdentity b
+--   NoIdentity (m (Event t (Identity a))) = m (Event t a)
+
+-- instance (HasClient t m a tag, HasClient t m b tag) => HasClient t m (a :<|> b) tag where
+--   type Client t m (a :<|> b) tag = Client t m a tag :<|> Client t m b tag
+
+--   clientWithRoute Proxy q pTag req baseurl opts wrap =
+--     clientWithRoute (Proxy :: Proxy a) q pTag req baseurl opts wrap :<|>
+--     clientWithRoute (Proxy :: Proxy b) q pTag req baseurl opts wrap
 
 
 -- Capture. Example:
@@ -181,16 +224,16 @@ instance (HasClient t m a tag, HasClient t m b tag) => HasClient t m (a :<|> b) 
 --           -> m (Event t (l, ReqResult Book))
 -- > getBook = client myApi (constDyn host)
 
-instance
-  ( HasClientMulti t m layout Identity tag
-  , Client t m sublayout tag ~ ClientMulti t m sublayout Identity tag )
-  => HasClient t m (Capture capture a :> sublayout) tag where
+-- instance
+--   ( HasClientMulti t m (Capture capture a :> sublayout) Identity tag
+--   , Client t m sublayout tag ~ ClientMulti t m sublayout Identity tag )
+--   => HasClient t m (Capture capture a :> sublayout) tag where
 
-  type Client t m (Capture capture a :> sublayout) tag =
-    Dynamic t (Either Text a) -> Client t m sublayout tag
+--   type Client t m (Capture capture a :> sublayout) tag =
+--     Dynamic t (Either Text a) -> Client t m sublayout tag
 
-  clientWithRoute l m tag req baseurl opts wrap val =
-    clientWithRouteMulti l m (Proxy :: Proxy Identity) tag (pure <$> req) baseurl opts (idWrapper)
+--   clientWithRoute l m tag req baseurl opts wrap val =
+--     clientWithRouteMulti l m (Proxy :: Proxy Identity) tag (pure <$> req) baseurl opts (idWrapper) (pure val)
 
 
 -- -- VERB (Returning content) --
