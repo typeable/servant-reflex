@@ -1,6 +1,7 @@
 {-# LANGUAGE AllowAmbiguousTypes        #-}
 {-# LANGUAGE FunctionalDependencies     #-}
 {-# LANGUAGE CPP                        #-}
+{-# LANGUAGE TypeApplications           #-}
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE DefaultSignatures          #-}
@@ -162,47 +163,35 @@ idWrapper
   -> Event t (Identity (ReqResult tag a)) -> m (Event t (Identity (ReqResult tag a)))
 idWrapper = Prelude.error "FIXME: rewrap not implemented"
 
--- data Case
---   = Case
+class (b ~ NoIdentity t m a) => KillIdentity t m a b where
+  killIdentity :: a -> NoIdentity t m a
 
--- type family FunArg a :: * where
---   FunArg (Identity a -> b) =
+instance ( KillIdentity t m a na, KillIdentity t m b nb
+         ) => KillIdentity t m (a :<|> b) (na :<|> nb) where
+  killIdentity (a :<|> b) = killIdentity @t @m a :<|> killIdentity @t @m b
 
-class (arg ~ FunArg a) => KillIdentity a arg b | a -> b where
-  -- type NoIdentity a :: *
-  killIdentity :: a -> b
+instance (KillIdentity t m b nb) => KillIdentity t m (Identity a -> b) (a -> nb) where
+  killIdentity f a = killIdentity @t @m $ f (Identity a)
 
-instance ( KillIdentity a na, KillIdentity b nb
-         ) => KillIdentity (a :<|> b) (na :<|> nb) where
-  -- type NoIdentity (a :<|> b) = (NoIdentity a) :<|> (NoIdentity b)
-  killIdentity (a :<|> b) = killIdentity a :<|> killIdentity b
+instance ( KillIdentity t m b nb, Functor (Dynamic t)
+         ) => KillIdentity t m (Dynamic t (Identity a) -> b) (Dynamic t a -> nb) where
+  killIdentity f da = killIdentity @t @m $ f $ Identity <$> da
 
-instance (KillIdentity b nb) => KillIdentity (Identity a -> b) (a -> nb) where
-  -- type NoIdentity (Identity a -> b) = a -> NoIdentity b
-  killIdentity f a = killIdentity $ f (Identity a)
+instance ( NoIdentity t m (a -> b) ~ (a -> nb), KillIdentity t m b nb
+         ) => KillIdentity t m (a -> b) (a -> nb) where
+  killIdentity f a = killIdentity @t @m $ f a
 
-instance ( KillIdentity b nb, Functor (Dynamic t)
-         ) => KillIdentity (Dynamic t (Identity a) -> b) (Dynamic t a -> nb) where
-  -- type NoIdentity (Dynamic t (Identity a) -> b) = Dynamic t a -> NoIdentity b
-  killIdentity f da = killIdentity $ f $ Identity <$> da
+instance ( Functor m, Functor (Event t)
+         , NoIdentity t m (m (Event t (Identity a))) ~ (m (Event t a))
+         ) => KillIdentity t m (m (Event t (Identity a))) (m (Event t a)) where
+  killIdentity = fmap (fmap runIdentity)
 
-instance (KillIdentity b nb) => KillIdentity (a -> b) (a -> nb) where
-  -- type NoIdentity (a -> b) = a -> NoIdentity b
-  killIdentity f a = killIdentity $ f a
-
--- instance (Functor m, Functor (Event t)
---          ) => KillIdentity (m (Event t (Identity a))) where
---   type NoIdentity (m (Event t (Identity a))) = m (Event t a)
---   killIdentity a = fmap (fmap runIdentity) a
-
--- type family NoIdentity a where
---   NoIdentity (a :<|> b) = NoIdentity a :<|> NoIdentity b
---   -- NoIdentity (Identity a) = a
---   -- NoIdentity (Dynamic (Identity a)) = Dynamic a
---   NoIdentity (Identity a -> b) = a -> NoIdentity b
---   NoIdentity (Dynamic t (Identity a) -> b) = Dynamic t a -> NoIdentity b
---   NoIdentity (a -> b) = a -> NoIdentity b
---   NoIdentity (m (Event t (Identity a))) = m (Event t a)
+type family NoIdentity t m a where
+  NoIdentity t m (a :<|> b) = NoIdentity t m a :<|> NoIdentity t m b
+  NoIdentity t m (Identity a -> b) = a -> NoIdentity t m b
+  NoIdentity t m (Dynamic t (Identity a) -> b) = Dynamic t a -> NoIdentity t m b
+  NoIdentity t m (a -> b) = a -> NoIdentity t m b
+  NoIdentity t m (m (Event t (Identity a))) = m (Event t a)
 
 -- instance (HasClient t m a tag, HasClient t m b tag) => HasClient t m (a :<|> b) tag where
 --   type Client t m (a :<|> b) tag = Client t m a tag :<|> Client t m b tag
