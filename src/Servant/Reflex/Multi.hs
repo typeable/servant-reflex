@@ -1,5 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes   #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE CPP                   #-}
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE FlexibleContexts      #-}
@@ -97,14 +97,20 @@ import           Servant.Common.Req     (ClientOptions,
 --     defaultClientOptions
 
 
--- -- | A version of @client@ that sets the withCredentials flag
--- -- on requests. Use this function for clients of CORS API's
--- clientWithOptsA :: (HasClientMulti t m layout f tag, Applicative f, Reflex t)
---                  => Proxy layout -> Proxy m -> Proxy f -> Proxy tag
---                  -> Dynamic t BaseUrl -> ClientOptions -> ClientMulti t m layout f tag
--- clientWithOptsA p q f tag baseurl opts =
---     clientWithRouteMulti p q f tag
---     (constDyn (pure defReq)) baseurl opts
+-- | A version of @client@ that sets the withCredentials flag
+-- on requests. Use this function for clients of CORS API's
+clientWithOptsA
+  :: (HasClientMulti t m layout f tag, Applicative f, Reflex t)
+  => Proxy layout
+  -> Proxy m
+  -> Proxy f
+  -> Proxy tag
+  -> Dynamic t BaseUrl
+  -> ClientOptions
+  -> ClientMulti t m layout f tag
+clientWithOptsA p q f tag baseurl opts =
+    clientWithRouteMulti p q f tag
+    (constDyn (pure defReq)) baseurl opts
 
 ------------------------------------------------------------------------------
 class HasClientMulti t m layout f (tag :: *) where
@@ -367,10 +373,11 @@ instance (MimeRender ct a,
              reqs'           = liftA2 req' <$> bodies <*> reqs
 
 
-instance (KnownSymbol path,
-          HasClientMulti t m sublayout f tag,
-          Reflex t,
-          Functor f) => HasClientMulti t m (path :> sublayout) f tag where
+instance
+  ( KnownSymbol path,
+    HasClientMulti t m sublayout f tag,
+    Reflex t,
+    Functor f ) => HasClientMulti t m (path :> sublayout) f tag where
   type ClientMulti t m (path :> sublayout) f tag = ClientMulti t m sublayout f tag
 
   clientWithRouteMulti Proxy q f tag reqs baseurl =
