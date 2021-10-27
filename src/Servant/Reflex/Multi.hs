@@ -15,25 +15,26 @@
 {-# LANGUAGE UndecidableInstances  #-}
 
 module Servant.Reflex.Multi (
-    -- -- * Compute servant client functions
-    -- clientA
-    -- , clientWithOptsA
-    -- , BaseUrl(..)
-    -- , Scheme(..)
+    -- * Compute servant client functions
+      clientA
+    , clientWithOptsA
+    , clientWithOptsAndResultHandlerA
+    , BaseUrl(..)
+    , Scheme(..)
 
-    -- -- * Build QueryParam arguments
-    -- , QParam(..)
+    -- * Build QueryParam arguments
+    , QParam(..)
 
-    -- -- * Access response data
-    -- , withCredentials
+    -- * Access response data
+    , withCredentials
 
-    -- -- * Access response data
-    -- , ReqResult(..)
-    -- , reqSuccess
-    -- , reqSuccess'
-    -- , reqFailure
-    -- , response
-    BuildHeaderKeysTo(..)
+    -- * Access response data
+    , ReqResult(..)
+    , reqSuccess
+    , reqSuccess'
+    , reqFailure
+    , response
+    , BuildHeaderKeysTo(..)
     , toHeaders
     , HasClientMulti(..)
     ) where
@@ -89,18 +90,19 @@ import           Servant.Common.Req     (ClientOptions,
 
 
 -- ------------------------------------------------------------------------------
--- clientA :: (HasClientMulti t m layout f tag, Applicative f, Reflex t)
---         => Proxy layout -> Proxy m -> Proxy f -> Proxy tag
---         -> Dynamic t BaseUrl -> ClientMulti t m layout f tag
--- clientA p q f tag baseurl  =
---     clientWithRouteMulti p q f tag (constDyn (pure defReq)) baseurl
---     defaultClientOptions
+clientA
+  :: (HasClientMulti t m layout f tag, Applicative f, Reflex t, Applicative m)
+  => Proxy layout
+  -> Proxy m
+  -> Proxy f
+  -> Proxy tag
+  -> Dynamic t BaseUrl
+  -> ClientMulti t m layout f tag
+clientA p q f tag baseurl  =
+  clientWithOptsA p q f tag baseurl defaultClientOptions
 
-
--- | A version of @client@ that sets the withCredentials flag
--- on requests. Use this function for clients of CORS API's
 clientWithOptsA
-  :: (HasClientMulti t m layout f tag, Applicative f, Reflex t)
+  :: (HasClientMulti t m layout f tag, Applicative f, Reflex t, Applicative m)
   => Proxy layout
   -> Proxy m
   -> Proxy f
@@ -108,9 +110,24 @@ clientWithOptsA
   -> Dynamic t BaseUrl
   -> ClientOptions
   -> ClientMulti t m layout f tag
-clientWithOptsA p q f tag baseurl opts =
+clientWithOptsA l m f tag url opts =
+  clientWithOptsAndResultHandlerA l m f tag url opts pure
+
+-- | A version of @client@ that sets the withCredentials flag
+-- on requests. Use this function for clients of CORS API's
+clientWithOptsAndResultHandlerA
+  :: (HasClientMulti t m layout f tag, Applicative f, Reflex t)
+  => Proxy layout
+  -> Proxy m
+  -> Proxy f
+  -> Proxy tag
+  -> Dynamic t BaseUrl
+  -> ClientOptions
+  -> (forall a. Event t (f (ReqResult tag a)) -> m (Event t (f (ReqResult tag a))))
+  -> ClientMulti t m layout f tag
+clientWithOptsAndResultHandlerA p q f tag baseurl opts wrap =
     clientWithRouteMulti p q f tag
-    (constDyn (pure defReq)) baseurl opts
+    (constDyn (pure defReq)) baseurl opts wrap
 
 ------------------------------------------------------------------------------
 class HasClientMulti t m layout f (tag :: *) where

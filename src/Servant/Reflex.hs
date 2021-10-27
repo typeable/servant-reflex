@@ -109,23 +109,25 @@ import           Servant.Reflex.Multi
 
 client
     :: ( HasClientMulti t m layout Identity tag, Applicative (Dynamic t)
-       , Functor (Event t), Applicative m)
+       , Functor (Event t), Applicative m
+       , KillIdentity t m tag (ClientMulti t m layout Identity tag) res )
     => Proxy layout
     -> Proxy m
     -> Proxy tag
     -> Dynamic t BaseUrl
-    -> ClientMulti t m layout Identity tag
+    -> res
 client l m tag baseurl = clientWithOpts l m tag baseurl defaultClientOptions
 
 clientWithOpts
     :: ( HasClientMulti t m layout Identity tag, Applicative (Dynamic t)
-       , Functor (Event t), Applicative m)
+       , Functor (Event t), Applicative m
+       , KillIdentity t m tag (ClientMulti t m layout Identity tag) res )
     => Proxy layout
     -> Proxy m
     -> Proxy tag
     -> Dynamic t BaseUrl
     -> ClientOptions
-    -> ClientMulti t m layout Identity tag
+    -> res
 clientWithOpts l m tag url opts =
   clientWithOptsAndResultHandler l m tag url opts pure
 
@@ -133,16 +135,18 @@ clientWithOpts l m tag url opts =
 -- result event in some way. This can be used to handle errors in a uniform way
 -- across call sites.
 clientWithOptsAndResultHandler
-    :: ( HasClientMulti t m layout Identity tag, Applicative (Dynamic t)
-       , Functor (Event t), Functor m)
+    :: forall t m layout tag res
+    . ( HasClientMulti t m layout Identity tag, Applicative (Dynamic t)
+      , Functor (Event t), Functor m
+      , KillIdentity t m tag (ClientMulti t m layout Identity tag) res )
     => Proxy layout
     -> Proxy m
     -> Proxy tag
     -> Dynamic t BaseUrl
     -> ClientOptions
     -> (forall a. Event t (ReqResult tag a) -> m (Event t (ReqResult tag a)))
-    -> ClientMulti t m layout Identity tag
-clientWithOptsAndResultHandler l m tag url opts wrap =
+    -> res
+clientWithOptsAndResultHandler l m tag url opts wrap = killIdentity @t @m @tag $
   clientWithRouteMulti l m (Proxy :: Proxy Identity) tag (pure $ Identity defReq)
   url opts (idHandlerWrapper wrap)
 
@@ -154,32 +158,32 @@ idHandlerWrapper
   -> Event t (Identity (ReqResult tag a)) -> m (Event t (Identity (ReqResult tag a)))
 idHandlerWrapper f req = fmap (fmap Identity) $ f $ fmap runIdentity req
 
-class (b ~ NoIdentity t m a) => KillIdentity t m a b where
-  killIdentity :: a -> NoIdentity t m a
+class (b ~ NoIdentity t m tag a) => KillIdentity t m tag a b where
+  killIdentity :: a -> NoIdentity t m tag a
 
-instance ( KillIdentity t m a na, KillIdentity t m b nb
-         ) => KillIdentity t m (a :<|> b) (na :<|> nb) where
-  killIdentity (a :<|> b) = killIdentity @t @m a :<|> killIdentity @t @m b
+instance ( KillIdentity t m tag a na, KillIdentity t m tag b nb
+         ) => KillIdentity t m tag (a :<|> b) (na :<|> nb) where
+  killIdentity (a :<|> b) = killIdentity @t @m @tag a :<|> killIdentity @t @m @tag b
 
-instance (KillIdentity t m b nb) => KillIdentity t m (Identity a -> b) (a -> nb) where
-  killIdentity f a = killIdentity @t @m $ f (Identity a)
+instance (KillIdentity t m tag b nb) => KillIdentity t m tag (Identity a -> b) (a -> nb) where
+  killIdentity f a = killIdentity @t @m @tag $ f (Identity a)
 
-instance ( KillIdentity t m b nb, Functor (Dynamic t)
-         ) => KillIdentity t m (Dynamic t (Identity a) -> b) (Dynamic t a -> nb) where
-  killIdentity f da = killIdentity @t @m $ f $ Identity <$> da
+instance ( KillIdentity t m tag b nb, Functor (Dynamic t)
+         ) => KillIdentity t m tag (Dynamic t (Identity a) -> b) (Dynamic t a -> nb) where
+  killIdentity f da = killIdentity @t @m @tag $ f $ Identity <$> da
 
-instance ( NoIdentity t m (a -> b) ~ (a -> nb), KillIdentity t m b nb
-         ) => KillIdentity t m (a -> b) (a -> nb) where
-  killIdentity f a = killIdentity @t @m $ f a
+instance ( NoIdentity t m tag (a -> b) ~ (a -> nb), KillIdentity t m tag b nb
+         ) => KillIdentity t m tag (a -> b) (a -> nb) where
+  killIdentity f a = killIdentity @t @m @tag $ f a
 
 instance ( Functor m, Functor (Event t)
-         , NoIdentity t m (m (Event t (Identity a))) ~ (m (Event t a))
-         ) => KillIdentity t m (m (Event t (Identity a))) (m (Event t a)) where
+         , NoIdentity t m tag (m (Event t (Identity (ReqResult tag a)))) ~ (m (Event t (ReqResult tag a)))
+         ) => KillIdentity t m tag (m (Event t (Identity (ReqResult tag a)))) (m (Event t (ReqResult tag a))) where
   killIdentity = fmap (fmap runIdentity)
 
-type family NoIdentity t m a where
-  NoIdentity t m (a :<|> b) = NoIdentity t m a :<|> NoIdentity t m b
-  NoIdentity t m (Identity a -> b) = a -> NoIdentity t m b
-  NoIdentity t m (Dynamic t (Identity a) -> b) = Dynamic t a -> NoIdentity t m b
-  NoIdentity t m (a -> b) = a -> NoIdentity t m b
-  NoIdentity t m (m (Event t (Identity a))) = m (Event t a)
+type family NoIdentity t m tag a where
+  -- NoIdentity t m tag (m (Event t (Identity (ReqResult tag a)))) = m (Event t (ReqResult tag a))
+  NoIdentity t m tag (a :<|> b) = NoIdentity t m tag a :<|> NoIdentity t m tag b
+  NoIdentity t m tag (Identity a -> b) = a -> NoIdentity t m tag b
+  NoIdentity t m tag (Dynamic t (Identity a) -> b) = Dynamic t a -> NoIdentity t m tag b
+  NoIdentity t m tag (a -> b) = a -> NoIdentity t m tag b
