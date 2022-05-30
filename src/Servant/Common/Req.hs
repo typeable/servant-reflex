@@ -298,7 +298,9 @@ performRequests reqMeth rs reqHost opts trigger = do
 performSomeRequestsAsync
     :: (MonadIO (Performable m),
         MonadJSM (Performable m),
+#if !MIN_VERSION_reflex_dom_core(0,7,0)
         HasWebView (Performable m),
+#endif
         PerformEvent t m,
         TriggerEvent t m,
         Traversable f,
@@ -428,4 +430,3 @@ builderToText = TE.decodeUtf8 . BL.toStrict . Builder.toLazyByteString
 
 escape :: T.Text -> T.Text
 escape = T.pack . N.escapeURIString (not . N.isReserved) . T.unpack . TE.decodeUtf8 . BL.toStrict . Builder.toLazyByteString . toEncodedUrlPiece
-

@@ -55,7 +55,7 @@ import           Servant.API             ((:<|>) (..), (:>), BasicAuth,
                                           Capture, Header, Headers (..),
                                           HttpVersion, IsSecure,
                                           MimeRender (..), MimeUnrender,
-                                          NoContent, QueryFlag, QueryParam,
+                                          NoContent, QueryFlag, QueryParam',
                                           QueryParams, Raw, ReflectMethod (..),
                                           RemoteHost, ReqBody,
                                           ToHttpApiData (..), Vault, Verb,
@@ -370,9 +370,9 @@ instance (HasClient t m sublayout tag, KnownSymbol sym)
 -- > -- 'getBooksBy Nothing' for all books
 -- > -- 'getBooksBy (Just "Isaac Asimov")' to get all books by Isaac Asimov
 instance (KnownSymbol sym, ToHttpApiData a, HasClient t m sublayout tag, Reflex t)
-      => HasClient t m (QueryParam sym a :> sublayout) tag where
+      => HasClient t m (QueryParam' mods sym a :> sublayout) tag where
 
-  type Client t m (QueryParam sym a :> sublayout) tag =
+  type Client t m (QueryParam' mods sym a :> sublayout) tag =
     Dynamic t (QParam a) -> Client t m sublayout tag
 
   -- if mparam = Nothing, we don't add it to the query string
@@ -622,4 +622,3 @@ type family HasCookieAuth xs :: Constraint where
   HasCookieAuth '[]         = CookieAuthNotEnabled
 
 class CookieAuthNotEnabled
-

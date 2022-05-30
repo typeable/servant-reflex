@@ -1,4 +1,5 @@
 {-# LANGUAGE ConstraintKinds     #-}
+{-# LANGUAGE CPP                 #-}
 {-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleContexts    #-}
@@ -31,8 +32,11 @@ import           Reflex
 import           Reflex.Dom.Core
 import           Text.Read
 
-
+#if !MIN_VERSION_reflex_dom_core(0,7,0)
 type SupportsServantReflex t m = (Reflex t, TriggerEvent t m, PerformEvent t m, HasWebView (Performable m), MonadJSM (Performable m))
+#else
+type SupportsServantReflex t m = (Reflex t, TriggerEvent t m, PerformEvent t m, MonadJSM (Performable m))
+#endif
 
 -- | URI scheme to use
 data Scheme =
