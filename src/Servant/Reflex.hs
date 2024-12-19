@@ -105,6 +105,13 @@ import qualified Network.HTTP.Media               as M
 import           Network.HTTP.Types.Status (Status(..))
 #endif
 
+#if MIN_VERSION_servant(0, 19, 0)
+import           Servant.API.Generic     (fromServant, GenericMode(..),
+                                          GenericServant, ToServant,
+                                          ToServantApi)
+import           Servant.API.NamedRoutes (NamedRoutes)
+#endif
+
 -- * Accessing APIs as a Client
 
 -- | 'client' allows you to produce operations to query an API from a client.
@@ -662,6 +669,23 @@ instance (HasClient t m api tag, Reflex t)
 --   type Client t m (WithNamedConfig name config subapi) = Client t m subapi
 --   clientWithRoute Proxy q = clientWithRoute (Proxy :: Proxy subapi) q
 
+#if MIN_VERSION_servant(0, 19, 0)
+data AsClientT (t :: *) (m :: * -> *) (tag :: *)
+
+instance GenericMode (AsClientT t m tag) where
+  type AsClientT t m tag :- api = Client t m api tag
+
+instance
+  ( Monad m
+  , HasClient t m (ToServantApi api) tag
+  , GenericServant api (AsClientT t m tag)
+  , Client t m (ToServantApi api) tag ~ ToServant api (AsClientT t m tag)
+  ) => HasClient t m (NamedRoutes api) tag where
+  type Client t m (NamedRoutes api) tag = api (AsClientT t m tag)
+  clientWithRouteAndResultHandler _ q pTag req baseurl opts wrap = fromServant
+    $ clientWithRouteAndResultHandler (Proxy :: Proxy (ToServantApi api))
+      q pTag req baseurl opts wrap
+#endif
 
 {- Note [Non-Empty Content Types]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
