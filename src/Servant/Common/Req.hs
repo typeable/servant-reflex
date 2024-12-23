@@ -145,7 +145,7 @@ data Req t = Req
   { reqMethod    :: Text
   , reqPathParts :: [Dynamic t (Either Text Text)]
   , qParams      :: [(Text, QueryPart t)]
-  , reqBody      :: Maybe (Dynamic t (Either Text (BL.ByteString, Text)))
+  , reqBody      :: Maybe (Dynamic t (Maybe (Either Text (BL.ByteString, Text))))
   , headers      :: [(Text, Dynamic t (Either Text Text))]
   , respHeaders  :: XhrResponseHeaders
   , authData     :: Maybe (Dynamic t (Maybe BasicAuthData))
@@ -238,17 +238,17 @@ reqToReflexRequest reqMeth reqHost req =
                       }
 
       xhrOpts :: Dynamic t (Either Text (XhrRequestConfig XhrPayload))
-      xhrOpts = case reqBody req of
+      xhrOpts = fromMaybe (pure Nothing) (reqBody req) >>= \case
         Nothing    -> ffor xhrHeaders $ \case
-                               Left e -> Left e
-                               Right hs -> Right $ def { _xhrRequestConfig_headers = Map.fromList hs
-                                                       , _xhrRequestConfig_user = Nothing
-                                                       , _xhrRequestConfig_password = Nothing
-                                                       , _xhrRequestConfig_responseType = Just XhrResponseType_ArrayBuffer
-                                                       , _xhrRequestConfig_sendData = mempty
-                                                       , _xhrRequestConfig_withCredentials = False
-                                                       }
-        Just rBody -> liftA2 mkConfigBody xhrHeaders rBody
+                                Left e -> Left e
+                                Right hs -> Right $ def { _xhrRequestConfig_headers = Map.fromList hs
+                                                        , _xhrRequestConfig_user = Nothing
+                                                        , _xhrRequestConfig_password = Nothing
+                                                        , _xhrRequestConfig_responseType = Just XhrResponseType_ArrayBuffer
+                                                        , _xhrRequestConfig_sendData = mempty
+                                                        , _xhrRequestConfig_withCredentials = False
+                                                        }
+        Just rBody -> fmap (flip mkConfigBody rBody) xhrHeaders
 
       mkAuth :: Maybe BasicAuthData -> Either Text (XhrRequestConfig x) -> Either Text (XhrRequestConfig x)
       mkAuth _ (Left e) = Left e

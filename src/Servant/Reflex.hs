@@ -61,10 +61,12 @@ import           Servant.API             ((:<|>) (..), (:>), BasicAuth,
                                           MimeRender (..), MimeUnrender,
                                           NoContent, QueryFlag, QueryParam',
                                           QueryParams, Raw, ReflectMethod (..),
-                                          RemoteHost, ReqBody,
+                                          RemoteHost, ReqBody',
                                           ToHttpApiData (..), Vault, Verb,
-                                          contentType)
+                                          contentType, SBoolI)
 import           Servant.API.Description (Summary)
+import           Servant.API.Modifiers   (FoldRequired, foldRequiredArgument,
+                                          RequiredArgument)
 import qualified Servant.Auth            as Auth
 
 import           Reflex.Dom.Core         (Dynamic, Event, Reflex,
@@ -463,23 +465,25 @@ instance (HasClient t m sublayout tag, KnownSymbol sym)
 -- > -- 'getBooksBy (Just "Isaac Asimov")' to get all books by Isaac Asimov
 instance
   ( KnownSymbol sym
+  , SBoolI (FoldRequired mods)
   , ToHttpApiData a
   , HasClient t m sublayout tag
   , Reflex t
   ) => HasClient t m (QueryParam' mods sym a :> sublayout) tag where
 
   type Client t m (QueryParam' mods sym a :> sublayout) tag =
-    Dynamic t (QParam a) -> Client t m sublayout tag
+    Dynamic t (Either Text (RequiredArgument mods a)) -> Client t m sublayout tag
 
-  -- if mparam = Nothing, we don't add it to the query string
-  clientWithRouteAndResultHandler Proxy q t req baseurl opts wrp mparam =
-    clientWithRouteAndResultHandler (Proxy :: Proxy sublayout) q t
-    (req {qParams = paramPair : qParams req}) baseurl opts wrp
+  clientWithRouteAndResultHandler Proxy q t req baseurl opts wrp optParam =
+    clientWithRouteAndResultHandler (Proxy :: Proxy sublayout) q t req' baseurl opts wrp
     where
-      pname = symbolVal (Proxy :: Proxy sym)
-      p prm = QueryPartParam $ fmap qParamToQueryPart prm
-      paramPair = (T.pack pname, p mparam)
-
+      req' = req { qParams = paramPair : qParams req }
+      paramPair =
+        ( T.pack (symbolVal (Proxy :: Proxy sym))
+        , QueryPartParam $ (fmap . fmap)
+          (foldRequiredArgument (Proxy :: Proxy mods) (Just . (toQueryParam :: a -> Text)) (fmap toQueryParam))
+          optParam
+        )
 
 -- | If you use a 'QueryParams' in one of your endpoints in your API,
 -- the corresponding querying function will automatically take
@@ -605,22 +609,25 @@ instance SupportsServantReflex t m => HasClient t m Raw tag where
 -- >   where host = BaseUrl Http "localhost" 8080
 -- > -- then you can just use "addBook" to query that endpoint
 
-instance (MimeRender ct a, HasClient t m sublayout tag, Reflex t)
-      => HasClient t m (ReqBody (ct ': cts) a :> sublayout) tag where
+instance (MimeRender ct a, SBoolI (FoldRequired mods), HasClient t m sublayout tag, Reflex t)
+      => HasClient t m (ReqBody' mods (ct ': cts) a :> sublayout) tag where
 
-  type Client t m (ReqBody (ct ': cts) a :> sublayout) tag =
-    Dynamic t (Either Text a) -> Client t m sublayout tag
+  type Client t m (ReqBody' mods (ct ': cts) a :> sublayout) tag =
+    Dynamic t (Either Text (RequiredArgument mods a)) -> Client t m sublayout tag
 
-  clientWithRouteAndResultHandler Proxy q t req baseurl opts wrap body =
+  clientWithRouteAndResultHandler Proxy q t req baseurl opts wrap optBody =
     clientWithRouteAndResultHandler (Proxy :: Proxy sublayout) q t req' baseurl opts wrap
-       where req'        = req { reqBody = bodyBytesCT }
-             ctProxy     = Proxy :: Proxy ct
-             ctString    = T.pack $ show $ contentType ctProxy
-             bodyBytesCT = Just $ (fmap . fmap)
-                             (\b -> (mimeRender ctProxy b, ctString))
-                             body
-
-
+      where
+        req' = req
+          { reqBody = Just $ fmap sequence $
+            (fmap . fmap)
+            (foldRequiredArgument (Proxy :: Proxy mods) (Just . mkBody) (fmap mkBody))
+            optBody
+          }
+        mkBody b =
+          ( mimeRender (Proxy :: Proxy ct) (b :: a)
+          , T.pack $ show $ contentType (Proxy :: Proxy ct)
+          )
 
 -- | Make the querying function append @path@ to the request path.
 instance (KnownSymbol path, HasClient t m sublayout tag, Reflex t) => HasClient t m (path :> sublayout) tag where

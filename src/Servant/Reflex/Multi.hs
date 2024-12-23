@@ -50,11 +50,13 @@ import           Servant.API             ((:<|>) (..), (:>), BasicAuth,
                                           Capture, Header, Headers (..),
                                           HttpVersion, IsSecure,
                                           MimeRender (..), MimeUnrender,
-                                          NoContent, QueryFlag, QueryParam,
+                                          NoContent, QueryFlag, QueryParam',
                                           QueryParams, Raw, ReflectMethod (..),
-                                          RemoteHost, ReqBody,
+                                          RemoteHost, ReqBody',
                                           ToHttpApiData (..), Vault, Verb,
-                                          contentType)
+                                          contentType, SBoolI)
+import           Servant.API.Modifiers   (FoldRequired, foldRequiredArgument,
+                                          RequiredArgument)
 import           Servant.API.Description (Summary)
 
 import           Reflex.Dom.Core         (Dynamic, Event, Reflex,
@@ -255,29 +257,32 @@ instance (HasClientMulti t m sublayout f tag, KnownSymbol sym)
 
 ------------------------------------------------------------------------------
 instance (KnownSymbol sym,
+          SBoolI (FoldRequired mods),
           ToHttpApiData a,
           HasClientMulti t m sublayout f tag,
           Reflex t,
           Applicative f)
-      => HasClientMulti t m (QueryParam sym a :> sublayout) f tag where
+      => HasClientMulti t m (QueryParam' mods sym a :> sublayout) f tag where
 
-  type ClientMulti t m (QueryParam sym a :> sublayout) f tag =
-    Dynamic t (f (QParam a)) -> ClientMulti t m sublayout f tag
+  type ClientMulti t m (QueryParam' mods sym a :> sublayout) f tag =
+    Dynamic t (f (Either Text (RequiredArgument mods a))) -> ClientMulti t m sublayout f tag
 
   -- if mparam = Nothing, we don't add it to the query string
   -- TODO: Check the above comment
   clientWithRouteMulti Proxy q f tag reqs baseurl opts mparams =
     clientWithRouteMulti (Proxy :: Proxy sublayout) q f tag
       reqs' baseurl opts
-
-    where pname = symbolVal (Proxy :: Proxy sym)
-          p prm = QueryPartParam $ fmap qParamToQueryPart prm
-          paramPair mp = (T.pack pname, p mp)
-          -- reqs' = (\params reqs -> (\req param -> req {qParams = paramPair param : qParams req}) <$> reqs <*> params)
-          --         <$> mparams <*> reqs
-          reqs' = liftA2 (\(pr :: QParam a) (r :: Req t) -> r { qParams = paramPair (constDyn pr) : qParams r })
-                  <$> mparams <*> reqs
-
+    where
+      reqs' = liftA2 req' <$> mparams <*> reqs
+      req' mparam r = r
+        { qParams = paramPair mparam : qParams r
+        }
+      paramPair optParam =
+        ( T.pack (symbolVal (Proxy :: Proxy sym))
+        , QueryPartParam $ constDyn $ fmap
+          (foldRequiredArgument (Proxy :: Proxy mods) (Just . (toQueryParam :: a -> Text)) (fmap toQueryParam))
+          optParam
+        )
 
 instance (KnownSymbol sym,
           ToHttpApiData a,
@@ -334,23 +339,28 @@ instance (SupportsServantReflex t m,
 
 
 instance (MimeRender ct a,
+          SBoolI (FoldRequired mods),
           HasClientMulti t m sublayout f tag,
           Reflex t,
           Applicative f)
-      => HasClientMulti t m (ReqBody (ct ': cts) a :> sublayout) f tag where
+      => HasClientMulti t m (ReqBody' mods (ct ': cts) a :> sublayout) f tag where
 
-  type ClientMulti t m (ReqBody (ct ': cts) a :> sublayout) f tag =
-    Dynamic t (f (Either Text a)) -> ClientMulti t m sublayout f tag
+  type ClientMulti t m (ReqBody' mods (ct ': cts) a :> sublayout) f tag =
+    Dynamic t (f (Either Text (RequiredArgument mods a))) -> ClientMulti t m sublayout f tag
 
   clientWithRouteMulti Proxy q f tag reqs baseurl opts bodies =
     clientWithRouteMulti (Proxy :: Proxy sublayout) q f tag reqs' baseurl opts
-       where req'        b r = r { reqBody = bodyBytesCT (constDyn b) }
-             ctProxy         = Proxy :: Proxy ct
-             ctString        = T.pack $ show $ contentType ctProxy
-             bodyBytesCT b   = Just $ (fmap . fmap)
-                               (\b' -> (mimeRender ctProxy b', ctString))
-                               b
-             reqs'           = liftA2 req' <$> bodies <*> reqs
+       where
+          reqs' = liftA2 req' <$> bodies <*> reqs
+          req' optBody r = r
+            { reqBody = Just $ constDyn $ sequence $ fmap
+              (foldRequiredArgument (Proxy :: Proxy mods) (Just . mkBody) (fmap mkBody))
+              optBody
+            }
+          mkBody b =
+            ( mimeRender (Proxy :: Proxy ct) (b :: a)
+            , T.pack $ show $ contentType (Proxy :: Proxy ct)
+            )
 
 
 instance (KnownSymbol path,
