@@ -36,6 +36,9 @@ module Servant.Reflex
   , Client
   , module Servant.Common.Req
   , module Servant.Common.BaseUrl
+#if MIN_VERSION_servant(0, 19, 0)
+  , AsClientT
+#endif
   ) where
 
 ------------------------------------------------------------------------------
